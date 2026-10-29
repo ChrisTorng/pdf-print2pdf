@@ -197,7 +197,7 @@ def run(argv: list[str]) -> int:
         if args.inspect:
             for index, source in enumerate(sources, 1):
                 print(f"[{index}/{len(sources)}] {source}")
-                print("    " + format_inspection(inspect_pdf(source)).replace("\n", "\n    "))
+                print("    " + format_inspection(inspect_pdf(source, args.password)).replace("\n", "\n    "))
             return 0
 
         jobs = make_jobs(sources, args.output)
@@ -205,7 +205,7 @@ def run(argv: list[str]) -> int:
         for index, job in enumerate(jobs, 1):
             print(f"[{index}/{len(jobs)}] {job.source} -> {job.output}", flush=True)
             try:
-                info = inspect_pdf(job.source)
+                info = inspect_pdf(job.source, args.password)
                 print("    " + format_inspection(info).replace("\n", "\n    "))
                 method = unlock_one(job, args, info)
             except (OSError, ValueError, RuntimeError) as error:
