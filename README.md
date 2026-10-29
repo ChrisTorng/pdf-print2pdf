@@ -119,7 +119,7 @@ python .\pdf_print2pdf.py .\pdfs .\out --recursive
 ### Windows PowerShell
 
 ~~~powershell
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-unlock.txt
 
 # 單檔，輸出 d-input.pdf
 python .\pdf_unlock.py .\input.pdf
