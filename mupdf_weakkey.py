@@ -57,20 +57,40 @@ def _find_key(raw_pdf: bytes) -> bytes:
     prefix = flags + bytes([255] * 4) + (b"T" if encrypts_metadata else b"F") + b"adb"
     encrypted_block = bytes.fromhex(encrypted.group(1).decode("ascii"))
 
-    match = None
+    def valid_key(key: bytes) -> bool:
+        return len(key) == 32 and _aes_decrypt_block(key, encrypted_block)[:12] == prefix
+
+    # The public second /ID is often generated from the same weak RNG,
+    # immediately before the file key. Correlating it avoids testing each
+    # possible AES key offset, including for repeated saves in one process.
+    id_pair = re.search(
+        rb"/ID\s*\[\s*<([0-9A-Fa-f]{32})>\s*<([0-9A-Fa-f]{32})>", raw_pdf
+    )
+    if id_pair:
+        second_id = bytes.fromhex(id_pair.group(2).decode("ascii"))
+        for seed in range(512):
+            stream = _rng_bytes(seed, 8192 + 64)
+            pos = stream.find(second_id)
+            if pos != -1:
+                key = stream[pos + 16 : pos + 48]
+                if valid_key(key):
+                    return key
+
+    # ID could have been preserved by an incremental rewrite, or be produced
+    # by a separate RNG. Fall back to verifying known /Perms plaintext.
     for seed in range(512):
-        # Some builds reuse the RNG across saves. Search extra stream offsets.
-        # Validate candidates using the known /Perms plaintext prefix.
         generated = _rng_bytes(seed, 1056)
-        for skip in range(1025):
-            candidate = generated[skip : skip + 32]
-            if _aes_decrypt_block(candidate, encrypted_block)[:12] == prefix:
-                if match is not None:
-                    raise NotVulnerableMuPDF("ambiguous weak-key candidates")
-                match = candidate
-    if match is None:
-        raise NotVulnerableMuPDF("no matching weak MuPDF key")
-    return match
+        for offset in (32, 16, 0, 48, 64):
+            candidate = generated[offset : offset + 32]
+            if valid_key(candidate):
+                return candidate
+        for offset in range(1025):
+            if offset in (0, 16, 32, 48, 64):
+                continue
+            candidate = generated[offset : offset + 32]
+            if valid_key(candidate):
+                return candidate
+    raise NotVulnerableMuPDF("no matching weak MuPDF key")
 
 
 def _rev6_hash(password: bytes, salt: bytes) -> bytes:
