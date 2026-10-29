@@ -7,6 +7,9 @@ from pathlib import Path
 import fitz
 
 from mupdf_weakkey import _aes_encrypt, _find_key, _rng_bytes
+from pdf_inspect import PdfInspection, format_inspection, identify_writer, inspect_pdf
+import subprocess
+import sys
 from pdf_unlock import run
 
 
@@ -50,6 +53,40 @@ class PdfUnlockTests(unittest.TestCase):
         self.assertEqual(run([str(self.plain)]), 0)
         self.assertEqual(run([str(self.plain)]), 2)
         self.assertEqual(run([str(self.plain), "--overwrite"]), 0)
+
+    def test_inspect_encrypted_does_not_guess_producer(self) -> None:
+        info = inspect_pdf(self.locked)
+        self.assertTrue(info.encrypted)
+        self.assertEqual(info.revision, 6)
+        self.assertEqual(info.crypt_filter, "AESV3")
+        self.assertEqual(info.candidates, ("mupdf", "foxit"))
+        self.assertIsNone(info.producer)
+        self.assertIn("unavailable", format_inspection(info))
+
+    def test_inspect_does_not_create_output(self) -> None:
+        self.assertEqual(run([str(self.locked), "--inspect"]), 0)
+        self.assertFalse((self.root / "p-locked.pdf").exists())
+
+    def test_engine_routing_does_not_equate_format_with_vendor(self) -> None:
+        basic = dict(path=self.locked, encrypted=True, revision=6, crypt_filter="AESV3",
+                     creator=None, version=None, metadata_available=True, parsed=True)
+        self.assertEqual(PdfInspection(producer="Foxit PDF Reader", **basic).candidates,
+                         ("foxit", "mupdf"))
+        self.assertEqual(PdfInspection(producer="LibreOffice", **basic).candidates,
+                         ("mupdf", "foxit"))
+        self.assertEqual(PdfInspection(producer=None, **{**basic, "revision": 7,
+                        "crypt_filter": "AESV4"}).candidates, ("foxit",))
+        self.assertEqual(PdfInspection(producer=None, **{**basic, "revision": 4,
+                        "crypt_filter": "AESV2"}).candidates, ())
+        self.assertEqual(identify_writer({"producer": "PyMuPDF 1.26.7"}), "PyMuPDF")
+
+    def test_original_cli_now_performs_inspection(self) -> None:
+        command = [sys.executable, str(Path(__file__).resolve().parents[1] / "pdf_print2pdf.py"),
+                   str(self.locked), "--inspect"]
+        result = subprocess.run(command, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("R6, AESV3", result.stdout)
+        self.assertFalse((self.root / "p-locked.pdf").exists())
 
     def test_weak_rng_seed_and_offset(self) -> None:
         # Self-contained /Perms fixture using the documented weak RNG.
