@@ -144,7 +144,7 @@ def unlock_one(job: PrintJob, args: argparse.Namespace, info: PdfInspection) -> 
     except ImportError as error:
         raise UserError(
             f"PyMuPDF missing from {sys.executable}; install using "
-            f"\"{sys.executable}\" -m pip install -r requirements.txt"
+            f"\"{sys.executable}\" -m pip install -r requirements-unlock.txt"
         ) from error
 
     try:
@@ -180,7 +180,7 @@ def unlock_one(job: PrintJob, args: argparse.Namespace, info: PdfInspection) -> 
             except ImportError as error:
                 raise UserError(
                     "MuPDF recovery needs cryptography: "
-                    f"\"{sys.executable}\" -m pip install -r requirements.txt"
+                    f"\"{sys.executable}\" -m pip install -r requirements-unlock.txt"
                 ) from error
             try:
                 modified, access_password = recover_pdf(job.source)
