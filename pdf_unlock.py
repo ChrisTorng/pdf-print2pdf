@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from pdf_inspect import PdfInspection, format_inspection, identify_writer, inspect_pdf
+
 from pdf_print2pdf import (
     PrintJob,
     UserError,
@@ -38,6 +40,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--foxit-exe", type=Path, help="Path to compiled foxit-decrypt.exe",
+    )
+    parser.add_argument(
+        "--inspect", action="store_true",
+        help="Only inspect encryption and available producer metadata; do not write PDF",
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--recursive", action="store_true")
@@ -77,6 +83,20 @@ def run_foxit_cli(source: Path, destination: Path, args: argparse.Namespace) -> 
         raise UserError(f"Foxit key recovery failed: {reason}")
 
 
+def print_writer(document: object) -> None:
+    """The recorded writer is not proof of which engine encrypted the file."""
+    metadata = getattr(document, "metadata", None) or {}
+    producer = metadata.get("producer")
+    creator = metadata.get("creator")
+    family = identify_writer(metadata)
+    if producer:
+        print(f"    Producer (metadata, after open): {producer}")
+    if creator:
+        print(f"    Creator (metadata, after open): {creator}")
+    if family:
+        print(f"    Recorded PDF writer family: {family} (not proof of encryption engine)")
+
+
 def save_unencrypted(document: object, output: Path) -> None:
     import fitz
 
@@ -94,7 +114,7 @@ def save_unencrypted(document: object, output: Path) -> None:
         staged.unlink(missing_ok=True)
 
 
-def unlock_one(job: PrintJob, args: argparse.Namespace) -> str:
+def unlock_one(job: PrintJob, args: argparse.Namespace, info: PdfInspection) -> str:
     try:
         import fitz
     except ImportError as error:
@@ -107,55 +127,64 @@ def unlock_one(job: PrintJob, args: argparse.Namespace) -> str:
         with fitz.open(job.source) as document:
             if not document.needs_pass:
                 save_unencrypted(document, job.output)
+                print_writer(document)
                 return "not encrypted"
             if args.password is not None and document.authenticate(args.password):
                 save_unencrypted(document, job.output)
-                return "password"
+                print_writer(document)
+                return "known password"
     except fitz.FileDataError:
-        # Foxit AESV4/R7 is not necessarily supported by the installed PyMuPDF.
-        # Let the original Rust decryptor parse it before we normalize its output.
+        # Foxit AESV4/R7 is not necessarily supported by installed PyMuPDF.
         if args.engine not in ("auto", "foxit"):
             raise
 
     if args.engine == "password":
         raise UserError(f"No valid PDF password provided: {job.source}")
 
-    failure = None
-    if args.engine in ("auto", "mupdf"):
-        try:
-            from mupdf_weakkey import NotVulnerableMuPDF, recover_pdf, temp_password
-        except ImportError as error:
-            raise UserError(
-                "MuPDF recovery needs cryptography: "
-                f"\"{sys.executable}\" -m pip install -r requirements.txt"
-            ) from error
-        try:
-            modified = recover_pdf(job.source)
-            with fitz.open(stream=modified, filetype="pdf") as document:
-                if not document.authenticate(temp_password()):
-                    raise NotVulnerableMuPDF("recovered key could not authenticate the PDF")
-                save_unencrypted(document, job.output)
-            return "MuPDF weak-key recovery"
-        except NotVulnerableMuPDF as error:
-            failure = str(error)
-            if args.engine == "mupdf":
-                raise UserError(f"MuPDF recovery failed: {failure}") from error
+    engines = info.candidates if args.engine == "auto" else (args.engine,)
+    if not engines:
+        raise UserError(
+            f"No supported automatic recovery for {info.encryption_name}. "
+            "Try a known password if available."
+        )
 
-    if args.engine in ("auto", "foxit"):
-        with tempfile.TemporaryDirectory(prefix="pdf-unlock-") as folder:
-            recovered = Path(folder) / "recovered.pdf"
+    failures: list[str] = []
+    for engine in engines:
+        if engine == "mupdf":
             try:
-                run_foxit_cli(job.source, recovered, args)
-            except UserError as error:
-                if failure is not None:
-                    raise UserError(f"MuPDF: {failure}\nFoxit: {error}") from error
-                raise
-            with fitz.open(recovered) as document:
-                if document.needs_pass:
-                    raise UserError("Foxit CLI returned an encrypted PDF")
-                save_unencrypted(document, job.output)
-        return "Foxit Rust CLI"
-    raise UserError("No recovery method selected")
+                from mupdf_weakkey import NotVulnerableMuPDF, recover_pdf, temp_password
+            except ImportError as error:
+                raise UserError(
+                    "MuPDF recovery needs cryptography: "
+                    f"\"{sys.executable}\" -m pip install -r requirements.txt"
+                ) from error
+            try:
+                modified = recover_pdf(job.source)
+                with fitz.open(stream=modified, filetype="pdf") as document:
+                    if not document.authenticate(temp_password()):
+                        raise NotVulnerableMuPDF("recovered key could not authenticate the PDF")
+                    save_unencrypted(document, job.output)
+                    print_writer(document)
+                return "verified MuPDF-compatible weak RNG"
+            except (NotVulnerableMuPDF, fitz.FileDataError) as error:
+                failures.append(f"MuPDF: {error}")
+        elif engine == "foxit":
+            with tempfile.TemporaryDirectory(prefix="pdf-unlock-") as folder:
+                recovered = Path(folder) / "recovered.pdf"
+                try:
+                    run_foxit_cli(job.source, recovered, args)
+                    with fitz.open(recovered) as document:
+                        if document.needs_pass:
+                            raise UserError("Foxit CLI returned an encrypted PDF")
+                        save_unencrypted(document, job.output)
+                        print_writer(document)
+                    return "verified Foxit/PDFium-compatible timestamp key"
+                except (UserError, fitz.FileDataError) as error:
+                    failures.append(f"Foxit: {error}")
+        else:
+            raise UserError(f"Unknown engine: {engine}")
+
+    raise UserError("No applicable key could be recovered. " + " | ".join(failures))
 
 
 def run(argv: list[str]) -> int:
@@ -165,12 +194,20 @@ def run(argv: list[str]) -> int:
         if not sources:
             print("No source PDFs found.")
             return 0
+        if args.inspect:
+            for index, source in enumerate(sources, 1):
+                print(f"[{index}/{len(sources)}] {source}")
+                print("    " + format_inspection(inspect_pdf(source)).replace("\n", "\n    "))
+            return 0
+
         jobs = make_jobs(sources, args.output)
         ensure_jobs_are_writable(jobs, args.overwrite)
         for index, job in enumerate(jobs, 1):
             print(f"[{index}/{len(jobs)}] {job.source} -> {job.output}", flush=True)
             try:
-                method = unlock_one(job, args)
+                info = inspect_pdf(job.source)
+                print("    " + format_inspection(info).replace("\n", "\n    "))
+                method = unlock_one(job, args, info)
             except (OSError, ValueError, RuntimeError) as error:
                 raise UserError(f"Failed to process {job.source}: {error}") from error
             print(f"    Method: {method}")
