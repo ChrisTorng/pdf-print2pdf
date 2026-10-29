@@ -196,6 +196,7 @@ python .\pdf_print2pdf.py .\input.pdf --engine foxit --pocs "D:\Tools\pocs"
 - 研究原文：https://v12.sh/blog/the-case-of-the-9bit-aes-key
 - 作者的 MuPDF Python PoC：https://github.com/v12-security/pocs/tree/main/pdf_decryptors/mupdf
 - MuPDF Python 復原程式依據公開的亂數弱點獨立實作，不需外部 mutool，並額外搜尋更多亂數串流偏移，以處理連續儲存的舊版 MuPDF。
+- MuPDF 解密流程使用 `secrets.token_urlsafe()` 每次隨機產生一次性的 PDF 存取密碼；該密碼只在記憶體中用於暫時改寫加密字典與 PyMuPDF 驗證，不儲存、不列印，也不使用程式碼中的固定密碼。
 - 支援 revision-6 AESV3 且使用一般十六進位 /Perms、/U、/UE 字典格式；不保證支援每種增量更新、物件壓縮或非標準加密結構。
 - Foxit Rust 工具支援格式以原作者 README 為準，不保證每個 Foxit 版本均受同一缺陷影響。
 - 重新輸出可能影響原 PDF 的數位簽章、互動功能或內部結構；需保留簽章效力時請保留原件。
