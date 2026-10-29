@@ -3,21 +3,22 @@
 Independent implementation of the key-generation weakness described by V12:
 https://v12.sh/blog/the-case-of-the-9bit-aes-key
 
-The recovered file key is rewrapped under a temporary known password so
-PyMuPDF can save an ordinary, unencrypted PDF. No intermediate PDF is saved.
+The recovered file key is rewrapped under a unique, randomly generated
+in-memory password so PyMuPDF can save an ordinary, unencrypted PDF.
+No intermediate PDF is saved.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import secrets
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 _MULTIPLIER = 0x5DEECE66D
 _MASK = (1 << 48) - 1
-_TEMP_PASSWORD = b"pdf-print2pdf-weakkey"
 
 
 class NotVulnerableMuPDF(ValueError):
@@ -107,18 +108,20 @@ def _rev6_hash(password: bytes, salt: bytes) -> bytes:
     return digest[:32]
 
 
-def recover_pdf(raw_path: Path) -> bytes:
-    """Return a still-encrypted PDF whose password is exposed by temp_password().
+def recover_pdf(raw_path: Path) -> tuple[bytes, str]:
+    """Return a transient in-memory PDF and its unique random access password.
 
-    Output is for transient in-memory use only. Only the final PyMuPDF output
-    should be written to disk.
+    The temporary password never appears in source control, logs, or on disk.
+    Only the final unencrypted output should be saved.
     """
     pdf = raw_path.read_bytes()
     key = _find_key(pdf)
+    access_password = secrets.token_urlsafe(32)
+    access_password_bytes = access_password.encode("ascii")
     validation_salt = b"P2PDFVAL"
     wrapping_salt = b"P2PDFKEY"
-    user_entry = _rev6_hash(_TEMP_PASSWORD, validation_salt) + validation_salt + wrapping_salt
-    wrap_key = _rev6_hash(_TEMP_PASSWORD, wrapping_salt)
+    user_entry = _rev6_hash(access_password_bytes, validation_salt) + validation_salt + wrapping_salt
+    wrap_key = _rev6_hash(access_password_bytes, wrapping_salt)
     wrapped_key = _aes_encrypt(wrap_key, bytes(16), key)
 
     new_pdf, count_u = re.subn(
@@ -131,8 +134,4 @@ def recover_pdf(raw_path: Path) -> bytes:
     )
     if (count_u, count_ue) != (1, 1):
         raise NotVulnerableMuPDF("unsupported PDF encryption dictionary layout")
-    return new_pdf
-
-
-def temp_password() -> str:
-    return _TEMP_PASSWORD.decode("ascii")
+    return new_pdf, access_password
