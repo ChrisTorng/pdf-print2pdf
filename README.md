@@ -1,6 +1,6 @@
 # pdf-print2pdf
 
-把 PDF 重新寫出成新的 PDF 檔。可指定單一 PDF，或指定資料夾批次處理所有 PDF；批次處理時會排除已產生的 `p-*.pdf`，避免把自己的輸出再重複處理。
+把 PDF 重新寫出成新的 PDF 檔，並自動檢查加密格式、選擇支援的解密引擎。可指定單一 PDF，或指定資料夾批次處理所有 PDF；批次處理時會排除已產生的 `p-*.pdf`，避免把自己的輸出再重複處理。
 
 此工具使用 PyMuPDF 重新儲存 PDF，適合用來重新產生、清理、正規化與壓縮 PDF。它不是透過系統印表機驅動程式列印，因此不需要另外安裝 Ghostscript。
 
@@ -103,9 +103,9 @@ python .\pdf_print2pdf.py .\pdfs .\out --recursive
 - PDF 會透過 PyMuPDF 重新儲存，並啟用清理、垃圾回收與壓縮選項。
 
 
-## 解除 PDF 加密：pdf_unlock.py
+## PDF 加密自動辨識與解密（統一入口：pdf_print2pdf.py）
 
-新增獨立 Python 命令，不影響原本的 pdf_print2pdf.py。支援原本的單檔、資料夾、批次輸出、p- 前綴、--recursive 與 --overwrite。
+沿用原本的 `pdf_print2pdf.py` 作為**唯一需要記住的 CLI**。`pdf_unlock.py` 是處理引擎路由的 Python 模組，也保留直接執行的相容入口。原有單檔、資料夾、批次輸出、p- 前綴、`--recursive` 與 `--overwrite` 全部保留。
 
 支援：
 - 未加密文件：直接重新輸出。
@@ -114,25 +114,49 @@ python .\pdf_print2pdf.py .\pdfs .\out --recursive
 - 受影響的 Foxit AESV3/AESV4 PDF：使用 V12 提供的 Rust CLI（需另行編譯）。
 - 不支援直接解開所有一般安全加密的 PDF。
 
+### PDF 來源辨識原則
+
+- `--inspect` 只讀取 PDF，加密修訂版 `/R`、加密方法 `/CFM` 及可讀的 `Producer`、`Creator`，不會輸出新檔；`--inspect --password` 可顯示正確解密後的原始產生器資訊。
+- `/Producer`、`/Creator`、XMP 等中繼資料在受密碼保護的 PDF 裡往往無法事先讀取；有值也可能被修改或只描述最近一次寫入軟體。**不能僅靠這些欄位確認是哪個加密實作。**
+- `R6 / AESV3`：先試 MuPDF 弱亂數金鑰驗證，再試 V12 Foxit Rust 解密器（若已編譯）；若可讀到 Foxit／PDFium 產生器中繼資料，則調整候選順序。
+- `R7 / AESV4`：只考慮已知 Foxit Rust 解密器。
+- 其他加密格式：已知密碼才嘗試一般解密，否則回報不支援。
+- **完成解密後**會讀取並報告 Producer／Creator；成功解密的方法表示符合某一金鑰弱點，*不保證*是該品牌軟體製作的文件。
+- 不會下載或自動安裝外部二進位檔。Foxit 工具如未編譯，會提示安裝方法；未安裝不會被誤報為已解密。
+
+~~~powershell
+# 只檢查文件格式與可能的解密方法
+python .\pdf_print2pdf.py .\input.pdf --inspect
+
+# 如果知道密碼，可解開中繼資料以查 Producer/Creator
+python .\pdf_print2pdf.py .\input.pdf --inspect --password "YOUR_PASSWORD"
+
+# 不用指定引擎，自動辨識、驗證並輸出
+python .\pdf_print2pdf.py .\input.pdf
+
+# 自動批次處理
+python .\pdf_print2pdf.py .\pdfs .\out --recursive
+~~~
+
 ### 安裝及基本使用（Windows PowerShell）
 
 ~~~powershell
 python -m pip install -r requirements.txt
 
 # 單檔：預設輸出 p-input.pdf
-python .\pdf_unlock.py .\input.pdf
+python .\pdf_print2pdf.py .\input.pdf
 
 # 指定輸出檔
-python .\pdf_unlock.py .\input.pdf .\output.pdf
+python .\pdf_print2pdf.py .\input.pdf .\output.pdf
 
 # 已知密碼（不需要弱金鑰漏洞）
-python .\pdf_unlock.py .\input.pdf --password "YOUR_PASSWORD" --engine password
+python .\pdf_print2pdf.py .\input.pdf --password "YOUR_PASSWORD" --engine password
 
 # 僅使用內建的 MuPDF 弱金鑰還原方法
-python .\pdf_unlock.py .\input.pdf --engine mupdf
+python .\pdf_print2pdf.py .\input.pdf --engine mupdf
 
 # 資料夾批次處理：輸出到 out，排除 p-*.pdf
-python .\pdf_unlock.py .\pdfs .\out --recursive --overwrite
+python .\pdf_print2pdf.py .\pdfs .\out --recursive --overwrite
 ~~~
 
 預設 --engine auto：先使用提供的密碼，再試 MuPDF 弱金鑰；若仍失敗，就在找到已編譯的 Foxit CLI 時執行 Foxit 復原。原始輸入不會被覆寫。若無法解密會顯示錯誤，不會產生假裝成功的檔案。
@@ -151,14 +175,14 @@ Push-Location ..\pocs\pdf_decryptors\foxitpdf
 cargo build --release
 Pop-Location
 
-python .\pdf_unlock.py .\input.pdf --engine foxit
+python .\pdf_print2pdf.py .\input.pdf --engine foxit
 ~~~
 
 預設搜尋相鄰的 ..\pocs\pdf_decryptors\foxitpdf\target\release\foxit-decrypt.exe，也可指定其他位置：
 
 ~~~powershell
-python .\pdf_unlock.py .\input.pdf --engine foxit --foxit-exe "D:\Tools\foxit-decrypt.exe"
-python .\pdf_unlock.py .\input.pdf --engine foxit --pocs "D:\Tools\pocs"
+python .\pdf_print2pdf.py .\input.pdf --engine foxit --foxit-exe "D:\Tools\foxit-decrypt.exe"
+python .\pdf_print2pdf.py .\input.pdf --engine foxit --pocs "D:\Tools\pocs"
 ~~~
 
 不透過本專案也可以直接執行作者工具（從 foxitpdf 目錄）：
