@@ -189,7 +189,11 @@ def run(argv: list[str]) -> int:
 
 
 def main() -> None:
-    raise SystemExit(run(sys.argv[1:]))
+    # Keep the established CLI entry point, automatically inspecting
+    # encryption and delegating to the appropriate recovery engine.
+    from pdf_unlock import run as run_with_detection
+
+    raise SystemExit(run_with_detection(sys.argv[1:]))
 
 
 if __name__ == "__main__":
