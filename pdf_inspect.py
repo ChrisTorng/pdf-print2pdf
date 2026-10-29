@@ -61,7 +61,7 @@ def _crypt_method(raw: bytes) -> str | None:
     return match.group(1).decode("ascii") if match else None
 
 
-def inspect_pdf(path: Path) -> PdfInspection:
+def inspect_pdf(path: Path, password: str | None = None) -> PdfInspection:
     import fitz
 
     path = path.expanduser().resolve()
@@ -70,6 +70,8 @@ def inspect_pdf(path: Path) -> PdfInspection:
             if not doc.is_pdf:
                 raise ValueError("not a PDF")
             encrypted = bool(doc.needs_pass or doc.is_encrypted)
+            if encrypted and password is not None and doc.needs_pass:
+                doc.authenticate(password)
             trailer = doc.pdf_trailer().encode("latin-1", errors="replace")
             if not encrypted:
                 metadata = doc.metadata or {}
