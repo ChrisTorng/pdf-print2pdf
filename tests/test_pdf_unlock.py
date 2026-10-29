@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import secrets
 import tempfile
 import unittest
 from pathlib import Path
 
 import fitz
 
-from mupdf_weakkey import _aes_encrypt, _find_key, _rng_bytes
+from mupdf_weakkey import _aes_encrypt, _find_key, _rng_bytes, recover_pdf
 from pdf_inspect import PdfInspection, format_inspection, identify_writer, inspect_pdf
 import subprocess
 import sys
@@ -23,12 +24,14 @@ class PdfUnlockTests(unittest.TestCase):
         pdf.set_metadata({"producer": "MuPDF UnitTest"})
         self.plain = self.root / "plain.pdf"
         self.locked = self.root / "locked.pdf"
+        self.password = secrets.token_urlsafe(18)
+        self.owner_password = secrets.token_urlsafe(18)
         pdf.save(self.plain)
         pdf.save(
             self.locked,
             encryption=fitz.PDF_ENCRYPT_AES_256,
-            user_pw="test1234",
-            owner_pw="owner",
+            user_pw=self.password,
+            owner_pw=self.owner_password,
         )
         pdf.close()
 
@@ -39,14 +42,14 @@ class PdfUnlockTests(unittest.TestCase):
             self.assertIn("Unlock test", result[0].get_text())
 
     def test_known_password(self) -> None:
-        self.assertEqual(run([str(self.locked), "--password", "test1234"]), 0)
+        self.assertEqual(run([str(self.locked), "--password", self.password]), 0)
         with fitz.open(self.root / "p-locked.pdf") as result:
             self.assertFalse(result.needs_pass)
             self.assertIn("Unlock test", result[0].get_text())
 
     def test_wrong_password(self) -> None:
         self.assertEqual(
-            run([str(self.locked), "--password", "wrong", "--engine", "password"]), 2
+            run([str(self.locked), "--password", self.password + "-incorrect", "--engine", "password"]), 2
         )
         self.assertFalse((self.root / "p-locked.pdf").exists())
 
@@ -65,7 +68,7 @@ class PdfUnlockTests(unittest.TestCase):
         self.assertIn("unavailable", format_inspection(info))
 
     def test_inspect_with_password_reads_producer(self) -> None:
-        info = inspect_pdf(self.locked, "test1234")
+        info = inspect_pdf(self.locked, self.password)
         self.assertEqual(info.producer, "MuPDF UnitTest")
         self.assertTrue(info.encrypted)
 
@@ -106,6 +109,21 @@ class PdfUnlockTests(unittest.TestCase):
             + encrypted.hex().encode("ascii") + b">"
         )
         self.assertEqual(_find_key(fake_pdf), key)
+
+    @unittest.skipUnless(
+        getattr(fitz, "mupdf_version_tuple", (999,)) < (1, 28, 5),
+        "MuPDF 1.28.5+ uses secure keys, not recoverable with the weak-key algorithm",
+    )
+    def test_unique_temporary_passwords(self) -> None:
+        patched_a, password_a = recover_pdf(self.locked)
+        patched_b, password_b = recover_pdf(self.locked)
+        self.assertNotEqual(password_a, password_b)
+        with fitz.open(stream=patched_a, filetype="pdf") as document:
+            self.assertTrue(document.authenticate(password_a))
+            self.assertFalse(document.authenticate(password_b))
+        with fitz.open(stream=patched_b, filetype="pdf") as document:
+            self.assertTrue(document.authenticate(password_b))
+            self.assertFalse(document.authenticate(password_a))
 
     @unittest.skipUnless(
         getattr(fitz, "mupdf_version_tuple", (999,)) < (1, 28, 5),
