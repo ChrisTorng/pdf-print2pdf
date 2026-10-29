@@ -101,3 +101,87 @@ python .\pdf_print2pdf.py .\pdfs .\out --recursive
 - 輸出路徑若不是 `.pdf`，或已存在且是資料夾，視為輸出資料夾。
 - 預設不覆蓋既有輸出檔；需要覆蓋請加上 `--overwrite`。
 - PDF 會透過 PyMuPDF 重新儲存，並啟用清理、垃圾回收與壓縮選項。
+
+
+## 解除 PDF 加密：pdf_unlock.py
+
+新增獨立 Python 命令，不影響原本的 pdf_print2pdf.py。支援原本的單檔、資料夾、批次輸出、p- 前綴、--recursive 與 --overwrite。
+
+支援：
+- 未加密文件：直接重新輸出。
+- 已知 PDF 使用者或擁有者密碼：由 PyMuPDF 解密後輸出。
+- MuPDF 1.28.5 以前所產生、符合弱金鑰特徵的 AES-256 revision-6 PDF：由本專案的 Python 復原程式處理，不需要 mutool 或 Rust。
+- 受影響的 Foxit AESV3/AESV4 PDF：使用 V12 提供的 Rust CLI（需另行編譯）。
+- 不支援直接解開所有一般安全加密的 PDF。
+
+### 安裝及基本使用（Windows PowerShell）
+
+~~~powershell
+python -m pip install -r requirements.txt
+
+# 單檔：預設輸出 p-input.pdf
+python .\pdf_unlock.py .\input.pdf
+
+# 指定輸出檔
+python .\pdf_unlock.py .\input.pdf .\output.pdf
+
+# 已知密碼（不需要弱金鑰漏洞）
+python .\pdf_unlock.py .\input.pdf --password "YOUR_PASSWORD" --engine password
+
+# 僅使用內建的 MuPDF 弱金鑰還原方法
+python .\pdf_unlock.py .\input.pdf --engine mupdf
+
+# 資料夾批次處理：輸出到 out，排除 p-*.pdf
+python .\pdf_unlock.py .\pdfs .\out --recursive --overwrite
+~~~
+
+預設 --engine auto：先使用提供的密碼，再試 MuPDF 弱金鑰；若仍失敗，就在找到已編譯的 Foxit CLI 時執行 Foxit 復原。原始輸入不會被覆寫。若無法解密會顯示錯誤，不會產生假裝成功的檔案。
+
+### Foxit Rust CLI（選用）
+
+作者提供的是可直接編譯並執行的 CLI，不必自行開發 Rust 專案：
+
+https://github.com/v12-security/pocs/tree/main/pdf_decryptors/foxitpdf
+
+先安裝 Rust（https://rustup.rs/）。在本專案目錄執行：
+
+~~~powershell
+git clone https://github.com/v12-security/pocs.git ..\pocs
+Push-Location ..\pocs\pdf_decryptors\foxitpdf
+cargo build --release
+Pop-Location
+
+python .\pdf_unlock.py .\input.pdf --engine foxit
+~~~
+
+預設搜尋相鄰的 ..\pocs\pdf_decryptors\foxitpdf\target\release\foxit-decrypt.exe，也可指定其他位置：
+
+~~~powershell
+python .\pdf_unlock.py .\input.pdf --engine foxit --foxit-exe "D:\Tools\foxit-decrypt.exe"
+python .\pdf_unlock.py .\input.pdf --engine foxit --pocs "D:\Tools\pocs"
+~~~
+
+不透過本專案也可以直接執行作者工具（從 foxitpdf 目錄）：
+
+~~~powershell
+.\target\release\foxit-decrypt.exe .\protected.pdf .\decrypted.pdf
+~~~
+
+### 範圍與限制
+
+- 研究原文：https://v12.sh/blog/the-case-of-the-9bit-aes-key
+- 作者的 MuPDF Python PoC：https://github.com/v12-security/pocs/tree/main/pdf_decryptors/mupdf
+- MuPDF Python 復原程式依據公開的亂數弱點獨立實作，不需外部 mutool，並額外搜尋更多亂數串流偏移，以處理連續儲存的舊版 MuPDF。
+- 支援 revision-6 AESV3 且使用一般十六進位 /Perms、/U、/UE 字典格式；不保證支援每種增量更新、物件壓縮或非標準加密結構。
+- Foxit Rust 工具支援格式以原作者 README 為準，不保證每個 Foxit 版本均受同一缺陷影響。
+- 重新輸出可能影響原 PDF 的數位簽章、互動功能或內部結構；需保留簽章效力時請保留原件。
+- 本專案不複製、再散布 V12 的 Rust PoC 原始碼，而是執行使用者自行編譯的官方程式。
+- 請只處理自己擁有或取得授權的 PDF。
+
+### 測試
+
+~~~powershell
+python -m unittest discover -s tests -v
+~~~
+
+使用 MuPDF 1.28.5 或更新版本時，端對端弱金鑰產生測試會略過。
