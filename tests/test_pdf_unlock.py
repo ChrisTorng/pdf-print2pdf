@@ -20,6 +20,7 @@ class PdfUnlockTests(unittest.TestCase):
         self.root = Path(self.workspace.name)
         pdf = fitz.open()
         pdf.new_page().insert_text((72, 72), "Unlock test")
+        pdf.set_metadata({"producer": "MuPDF UnitTest"})
         self.plain = self.root / "plain.pdf"
         self.locked = self.root / "locked.pdf"
         pdf.save(self.plain)
@@ -62,6 +63,11 @@ class PdfUnlockTests(unittest.TestCase):
         self.assertEqual(info.candidates, ("mupdf", "foxit"))
         self.assertIsNone(info.producer)
         self.assertIn("unavailable", format_inspection(info))
+
+    def test_inspect_with_password_reads_producer(self) -> None:
+        info = inspect_pdf(self.locked, "test1234")
+        self.assertEqual(info.producer, "MuPDF UnitTest")
+        self.assertTrue(info.encrypted)
 
     def test_inspect_does_not_create_output(self) -> None:
         self.assertEqual(run([str(self.locked), "--inspect"]), 0)
