@@ -103,13 +103,19 @@ def unlock_one(job: PrintJob, args: argparse.Namespace) -> str:
             f"\"{sys.executable}\" -m pip install -r requirements.txt"
         ) from error
 
-    with fitz.open(job.source) as document:
-        if not document.needs_pass:
-            save_unencrypted(document, job.output)
-            return "not encrypted"
-        if args.password is not None and document.authenticate(args.password):
-            save_unencrypted(document, job.output)
-            return "password"
+    try:
+        with fitz.open(job.source) as document:
+            if not document.needs_pass:
+                save_unencrypted(document, job.output)
+                return "not encrypted"
+            if args.password is not None and document.authenticate(args.password):
+                save_unencrypted(document, job.output)
+                return "password"
+    except fitz.FileDataError:
+        # Foxit AESV4/R7 is not necessarily supported by the installed PyMuPDF.
+        # Let the original Rust decryptor parse it before we normalize its output.
+        if args.engine not in ("auto", "foxit"):
+            raise
 
     if args.engine == "password":
         raise UserError(f"No valid PDF password provided: {job.source}")
