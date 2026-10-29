@@ -152,16 +152,16 @@ def unlock_one(job: PrintJob, args: argparse.Namespace, info: PdfInspection) -> 
     for engine in engines:
         if engine == "mupdf":
             try:
-                from mupdf_weakkey import NotVulnerableMuPDF, recover_pdf, temp_password
+                from mupdf_weakkey import NotVulnerableMuPDF, recover_pdf
             except ImportError as error:
                 raise UserError(
                     "MuPDF recovery needs cryptography: "
                     f"\"{sys.executable}\" -m pip install -r requirements.txt"
                 ) from error
             try:
-                modified = recover_pdf(job.source)
+                modified, access_password = recover_pdf(job.source)
                 with fitz.open(stream=modified, filetype="pdf") as document:
-                    if not document.authenticate(temp_password()):
+                    if not document.authenticate(access_password):
                         raise NotVulnerableMuPDF("recovered key could not authenticate the PDF")
                     save_unencrypted(document, job.output)
                     print_writer(document)
